@@ -1,0 +1,36 @@
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: l2go-auth-db
+    environment:
+      POSTGRES_USER: l2auth
+      POSTGRES_PASSWORD: l2auth
+      POSTGRES_DB: l2auth
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./schemas/l2auth.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U l2auth -d l2auth"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  l2go-auth:
+    build: .
+    container_name: l2go-auth
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "2106:2106"
+      - "9014:9014"
+      - "9090:9090"
+    env_file:
+      - .env
+    environment:
+      - DB_HOST=db
+
+volumes:
+  postgres_data:

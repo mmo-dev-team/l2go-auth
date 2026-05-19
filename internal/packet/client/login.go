@@ -1,0 +1,217 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// Copyright (c) 2026 whiteo. All rights reserved.
+
+package client
+
+import (
+	"context"
+	"errors"
+	"net/netip"
+	"strings"
+	"time"
+
+	"github.com/mmo-dev-team/l2go-auth/internal/client"
+	"github.com/mmo-dev-team/l2go-auth/internal/metrics"
+	"github.com/mmo-dev-team/l2go-auth/internal/service"
+
+	"github.com/mmo-dev-team/l2go-auth/pkg/crypto"
+	"github.com/mmo-dev-team/l2go-auth/pkg/network"
+
+	"github.com/rs/zerolog/log"
+)
+
+type LoginController struct {
+	auth     *service.Authenticator
+	sessions *service.SessionRegistry
+	bans     *service.BanManager
+	kicker   service.Kicker
+}
+
+// NewLoginController provisions the auth engine layout during initialization.
+func NewLoginController(
+	auth *service.Authenticator,
+	sessions *service.SessionRegistry,
+	bans *service.BanManager,
+	kicker service.Kicker,
+) *LoginController {
+	return &LoginController{
+		auth:     auth,
+		sessions: sessions,
+		bans:     bans,
+		kicker:   kicker,
+	}
+}
+
+// HandleLogin processes client credentials safely and maps state configurations.
+func (ctrl *LoginController) HandleLogin(c *client.Client, r *network.PacketReader) error {
+	if c.State != client.StateAuthedGG {
+		log.Warn().Str("ip", c.RemoteIP).Msg("Login request dropped: GameGuard verification incomplete")
+		return sendLoginFail(c, 0x01) // REASON_SYSTEM_ERROR
+	}
+
+	var decrypted [256]byte
+	username, password, err := ctrl.readLoginDataStack(r, c.ScrambledKey, &decrypted)
+	if err != nil {
+		log.Error().Err(err).Str("ip", c.RemoteIP).Msg("Failed to decode cipher identity structures")
+		return sendLoginFail(c, 0x01)
+	}
+
+	account, err := ctrl.auth.Authenticate(context.Background(), username, password, c.RemoteIP)
+	if err != nil {
+		metrics.LoginAttempts.WithLabelValues("fail", getFailLabel(err)).Inc()
+		log.Warn().Err(err).Str("ip", c.RemoteIP).Str("username", username).Msg("Authentication failed")
+		ipAddr, nErr := netip.ParseAddr(c.RemoteIP)
+		if nErr != nil {
+			ipAddr = netip.IPv4Unspecified()
+		}
+		ctrl.bans.RecordFailure(ipAddr)
+
+		if errors.Is(err, service.ErrAccountBanned) {
+			return c.SendAndClose(ServerLoginBanned, func(w *network.PacketWriter) {
+				w.WriteByte(0x20) // Banned payload reason code
+			})
+		}
+		return sendLoginFail(c, getFailReasonFromError(err))
+	}
+
+	metrics.LoginAttempts.WithLabelValues("success", "").Inc()
+	kickOld, allow := ctrl.sessions.TryRegister(username)
+	if !allow {
+		return sendLoginFail(c, 0x07) // REASON_ACCOUNT_IN_USE
+	}
+
+	if kickOld {
+		if sess, ok := ctrl.sessions.Get(username); ok {
+			if sess.ServerID == 0 {
+				ctrl.kicker.KickAccount(username)
+			} else {
+				ctrl.kicker.KickFromGame(username, sess.ServerID)
+			}
+		}
+	}
+
+	ipAddr, nErr := netip.ParseAddr(c.RemoteIP)
+	if nErr != nil {
+		ipAddr = netip.IPv4Unspecified()
+	}
+	ctrl.bans.ResetAttempts(ipAddr)
+	ctrl.sessions.Register(username, c.SessionID)
+
+	c.AccountID = account.ID
+	c.Account = username
+	c.State = client.StateAuthedLogin
+	c.LastServer = account.LastServer
+
+	c.Send(ServerLoginOK, func(w *network.PacketWriter) {
+		w.WriteInt32(c.SessionKey.LoginOkID1)
+		w.WriteInt32(c.SessionKey.LoginOkID2)
+		w.WriteInt32(0x00)
+		w.WriteInt32(0x00)
+		w.WriteInt32(0x000003ea) // Protocol version target
+		w.WriteInt32(0x00)
+		w.WriteInt32(0x00)
+		w.WriteInt32(0x00)
+		for i := 0; i < 4; i++ {
+			w.WriteInt32(0x00)
+		}
+	})
+
+	return nil
+}
+
+func (ctrl *LoginController) readLoginDataStack(
+	r *network.PacketReader,
+	key *crypto.ScrambledKey,
+	decrypted *[256]byte,
+) (string, string, error) {
+	block1, err := r.ReadBytes(128)
+	if err != nil {
+		return "", "", err
+	}
+
+	newMethod := r.ReadableBytes() >= 128
+
+	var block2 []byte
+	if newMethod {
+		block2, err = r.ReadBytes(128)
+		if err != nil {
+			return "", "", err
+		}
+	}
+
+	part1, err := crypto.RSADecrypt(key, block1)
+	if err != nil {
+		return "", "", err
+	}
+	copy(decrypted[0:128], part1)
+
+	var username, password string
+
+	if newMethod {
+		start := time.Now()
+		part2, nErr := crypto.RSADecrypt(key, block2)
+		metrics.RSADecryptDuration.Observe(time.Since(start).Seconds())
+		if nErr != nil {
+			return "", "", nErr
+		}
+		copy(decrypted[128:256], part2)
+
+		username = cleanBytesToString(decrypted[0x4E:0x4E+50]) + cleanBytesToString(decrypted[0xCE:0xCE+14])
+		password = cleanBytesToString(decrypted[0xDC : 0xDC+16])
+	} else {
+		username = cleanBytesToString(decrypted[0x5E : 0x5E+14])
+		password = cleanBytesToString(decrypted[0x6C : 0x6C+16])
+	}
+
+	return strings.ToLower(username), password, nil
+}
+
+func getFailLabel(err error) string {
+	switch {
+	case errors.Is(err, service.ErrInvalidPassword):
+		return "invalid_password"
+	case errors.Is(err, service.ErrAccountNotFound):
+		return "account_not_found"
+	case errors.Is(err, service.ErrAccountBanned):
+		return "account_banned"
+	default:
+		return "system_error"
+	}
+}
+
+func cleanBytesToString(b []byte) string {
+	start := 0
+	end := len(b)
+
+	for start < end && (b[start] == 0 || b[start] == ' ') {
+		start++
+	}
+	for end > start && (b[end-1] == 0 || b[end-1] == ' ') {
+		end--
+	}
+
+	if start >= end {
+		return ""
+	}
+
+	return string(b[start:end])
+}
+
+func sendLoginFail(c *client.Client, reason byte) error {
+	return c.SendAndClose(ServerLoginFail, func(w *network.PacketWriter) {
+		w.WriteByte(reason)
+	})
+}
+
+func getFailReasonFromError(err error) byte {
+	switch {
+	case errors.Is(err, service.ErrInvalidPassword):
+		return 0x02
+	case errors.Is(err, service.ErrAccountNotFound):
+		return 0x01
+	default:
+		return 0x01
+	}
+}
