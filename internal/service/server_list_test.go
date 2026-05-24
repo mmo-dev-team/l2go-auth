@@ -20,7 +20,7 @@ func TestServerList_UpdateStatus(t *testing.T) {
 	sl.Register(srv)
 
 	t.Run("Update Current Players", func(t *testing.T) {
-		sl.UpdateStatus(1, 0x04, 50)
+		sl.UpdateStatus(1, 0x02, 50)
 		snap := sl.GetServers()
 		found := false
 		for i := 0; i < snap.Count; i++ {
@@ -49,7 +49,7 @@ func TestServerList_UpdateStatus(t *testing.T) {
 	})
 
 	t.Run("Update with invalid ID does nothing", func(t *testing.T) {
-		sl.UpdateStatus(99, 0x04, 10)
+		sl.UpdateStatus(99, 0x02, 10)
 		snap := sl.GetServers()
 		for i := 0; i < snap.Count; i++ {
 			if snap.Servers[i].ID == 1 {
