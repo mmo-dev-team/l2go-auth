@@ -13,11 +13,12 @@ import (
 
 const (
 	// GS -> LS opcodes
-	GameServerAuth    = 0x01
-	PlayerInGame      = 0x02
-	PlayerLogout      = 0x03
-	PlayerAuthRequest = 0x05
-	ReplyCharacters   = 0x08
+	GameServerAuth     = 0x01
+	PlayerInGame       = 0x02
+	PlayerLogout       = 0x03
+	PlayerAuthRequest  = 0x05
+	ServerStatusUpdate = 0x06
+	ReplyCharacters    = 0x08
 
 	// LS -> GS opcodes
 	InitLS             = 0x00

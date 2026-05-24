@@ -31,7 +31,7 @@ type ServerSnapshot struct {
 }
 
 // MaxSupportedServers defines the upper bound of Game Servers in the cluster.
-const MaxSupportedServers = 32
+const MaxSupportedServers = 16
 
 // ServerList manages the collection of registered Game Servers and account character counts.
 type ServerList struct {
@@ -96,41 +96,11 @@ func (s *ServerList) UpdateStatus(id int32, infoType int, value int32) {
 
 	srv := &s.servers[id]
 	switch infoType {
-	case 0x01: // Status (Up/Down/Busy)
+	case 0x01: // Status update (Up/Down/Busy)
 		srv.Status = byte(value)
-	case 0x02: // Server Type (Clock/Normal)
-		srv.ServerType = value
-	case 0x03: // Brackets (True/False)
-		srv.Brackets = value == 1
-	case 0x04: // Max Players capacity
-		srv.MaxPlayers = int16(value)
+	case 0x02: // Current Players update
+		srv.CurrentPlayers = int16(value)
 	}
-}
-
-// AddPlayer increments the current player count for a server.
-func (s *ServerList) AddPlayer(id int32) {
-	if id < 0 || id >= MaxSupportedServers {
-		return
-	}
-
-	s.mu.Lock()
-	if s.active[id] {
-		s.servers[id].CurrentPlayers++
-	}
-	s.mu.Unlock()
-}
-
-// RemovePlayer decrements the current player count for a server.
-func (s *ServerList) RemovePlayer(id int32) {
-	if id < 0 || id >= MaxSupportedServers {
-		return
-	}
-
-	s.mu.Lock()
-	if s.active[id] && s.servers[id].CurrentPlayers > 0 {
-		s.servers[id].CurrentPlayers--
-	}
-	s.mu.Unlock()
 }
 
 // GetServers returns a snapshot of all active servers by value.

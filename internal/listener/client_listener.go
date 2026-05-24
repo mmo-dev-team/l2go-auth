@@ -72,7 +72,7 @@ func NewClientListener(
 	}
 
 	loginCtrl := clientPacket.NewLoginController(auth, sessions, bans, kicker)
-	serverListCtrl := clientPacket.NewDashboardController(serverList, kicker)
+	serverListCtrl := clientPacket.NewServerDashboardController(serverList, kicker)
 
 	listener.registry.Register(clientPacket.ClientAuthGG, clientPacket.AuthGG)
 	listener.registry.Register(clientPacket.ClientLogin, loginCtrl.HandleLogin)

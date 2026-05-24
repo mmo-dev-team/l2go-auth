@@ -39,12 +39,18 @@ func GameServerLogin(auth *service.Authenticator) Handler {
 			return err
 		}
 
+		if serverID < 0 || serverID >= service.MaxSupportedServers {
+			log.Warn().Str("ip", c.RemoteIP).Int32("server_id", serverID).Msg("Client requested invalid server ID")
+			return c.Close()
+		}
+
 		if !c.SessionKey.CheckLoginPair(loginOK1, loginOK2) {
 			log.Warn().Str("ip", c.RemoteIP).Msg("Invalid session key")
 			return c.Close()
 		}
 
 		if c.LastServer != serverID {
+			c.LastServer = serverID
 			auth.UpdateLastServer(context.Background(), c.Account, serverID)
 		}
 
@@ -58,7 +64,7 @@ func GameServerLogin(auth *service.Authenticator) Handler {
 
 		session.Put(c.SessionKey.LoginOkID1, s)
 
-		return c.Send(ServerPlayOK, func(w *network.PacketWriter) {
+		return c.SendAsync(ServerPlayOK, func(w *network.PacketWriter) {
 			w.WriteInt32(c.SessionKey.PlayOkID1)
 			w.WriteInt32(c.SessionKey.PlayOkID2)
 		})

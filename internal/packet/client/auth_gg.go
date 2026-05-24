@@ -27,7 +27,7 @@ func AuthGG(c *client.Client, r *network.PacketReader) error {
 			Int32("received", sessionID).
 			Msg("Invalid session ID")
 
-		c.SendAndClose(ServerLoginFail, func(w *network.PacketWriter) {
+		c.SendAndCloseAsync(ServerLoginFail, func(w *network.PacketWriter) {
 			w.WriteByte(0x01) // REASON_SYSTEM_ERROR
 		})
 		return nil
@@ -35,7 +35,7 @@ func AuthGG(c *client.Client, r *network.PacketReader) error {
 
 	c.State = client.StateAuthedGG
 
-	c.Send(ServerAuthGG, func(w *network.PacketWriter) {
+	c.SendAsync(ServerAuthGG, func(w *network.PacketWriter) {
 		w.WriteInt32(c.SessionID)
 	})
 

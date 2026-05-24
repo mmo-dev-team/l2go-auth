@@ -26,7 +26,7 @@ production-grade reliability using an event-driven networking model.
     * **Anti-Bruteforce:** Integrated `BanManager` that tracks failed attempts and automatically jails IPs.
     * **Rate Limiting:** Built-in TCP connection rate limiting to protect against connection flood attacks.
 * **Optimized Cryptography:**
-    * Pre-generated **RSA Key Pool** to prevent CPU spikes during mass login events.
+    * Pre-generated **RSA Key Pool** (32 keys) to prevent CPU spikes during mass login events.
     * Custom Blowfish implementation compliant with the L2 protocol.
 * **Modern Database Stack:** Uses [sqlc](https://sqlc.dev/) for compile-time safe, zero-reflection SQL queries
   over [pgx](https://github.com/jackc/pgx) (PostgreSQL).
@@ -34,12 +34,15 @@ production-grade reliability using an event-driven networking model.
   database latency in real-time with Grafana.
 * **Scalable Architecture:** Sharded Session Registry (64 shards) to minimize lock contention in multi-threaded
   environments.
+* **Session Management:**
+    * **Integrated Kicker:** Gracefully handles concurrent login attempts by disconnecting existing sessions across Login and Game Servers.
+    * **Smart Rejection:** Prevents login spam and manages session handovers between LS and GS.
 
 ## Getting Started
 
 ### Prerequisites
 
-* Go 1.25 or higher
+* Go 1.26 or higher
 * PostgreSQL instance
 * (Optional) Prometheus for metrics
 
@@ -81,8 +84,13 @@ The application is configured using environment variables. You can find a templa
 | `DB_PWD` | Database Password | `l2auth` |
 | `DB_NAME` | Database Name | `l2auth` |
 | `DB_SSL_MODE` | SSL Mode (disable, require, etc.) | `disable` |
+| `DB_MAX_CONN` | Maximum number of open connections | `20` |
+| `DB_IDLE_CONN` | Maximum number of idle connections | `10` |
+| `DB_MAX_LIFETIME` | Maximum amount of time a connection may be reused (seconds) | `300` |
+| `DB_MAX_CONN_IDLE_TIME` | Maximum amount of time a connection may be idle (seconds) | `60` |
 | `ATTEMPTS_LOGIN_COUNT` | Failed login attempts before IP ban | `5` |
 | `AUTO_CREATE_ACCOUNT` | Enable/Disable auto account creation | `true` |
+| `LOGIN_RATE_LIMIT` | Max login requests per second | `10` |
 
 ### Running the Server
 
@@ -151,9 +159,11 @@ go test -v ./...
 Metrics are exposed at `http://localhost:9090/metrics` by default.
 Key metrics include:
 
-* `l2auth_active_connections`: Current TCP sessions.
+* `l2auth_active_connections`: Current active TCP sessions.
+* `l2auth_connections_total`: Total number of established connections.
 * `l2auth_login_attempts_total`: Success/Failure stats with reason labels.
-* `l2auth_db_query_duration_seconds`: Histogram of DB performance.
+* `l2auth_db_query_duration_seconds`: Histogram of database query latency.
+* `l2auth_rsa_decrypt_duration_seconds`: Histogram of RSA decryption performance.
 
 ## Contributing
 

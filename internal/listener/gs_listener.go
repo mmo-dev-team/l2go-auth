@@ -57,7 +57,7 @@ func NewGameServerListener(
 	listener.registry.Register(gs.PlayerLogout, playerCtrl.HandlePlayerLogout)
 	listener.registry.Register(gs.PlayerAuthRequest, gs.HandleValidate)
 	listener.registry.Register(gs.ReplyCharacters, charCtrl.HandleReplyCharacters)
-	listener.registry.Register(0x06, statusCtrl.HandleStatus) // Opcode 0x06: ServerStatus update
+	listener.registry.Register(gs.ServerStatusUpdate, statusCtrl.HandleStatus)
 
 	return listener
 }
@@ -195,7 +195,7 @@ func (gsl *GameServerListener) KickAccount(username string, serverID int32) {
 
 	for _, gsc := range gsl.servers {
 		if gsc.ServerID == serverID {
-			log.Info().
+			log.Debug().
 				Str("account", username).
 				Int32("server_id", serverID).
 				Msg("Sending KickPlayer to Game Server")

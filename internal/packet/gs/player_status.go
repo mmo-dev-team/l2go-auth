@@ -57,7 +57,6 @@ func (ctrl *PlayerLifecycleController) HandlePlayerInGame(
 		}
 
 		ctrl.sessions.SetGS(account, gsc.ServerID)
-		ctrl.serverSvc.AddPlayer(gsc.ServerID)
 	}
 	return nil
 }
@@ -77,9 +76,7 @@ func (ctrl *PlayerLifecycleController) HandlePlayerLogout(
 		return nil
 	}
 
-	if ctrl.sessions.Unregister(account, sess.SessionID) {
-		ctrl.serverSvc.RemovePlayer(gsc.ServerID)
-	}
+	ctrl.sessions.Unregister(account, sess.SessionID)
 
 	return nil
 }

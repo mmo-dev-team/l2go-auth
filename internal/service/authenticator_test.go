@@ -13,6 +13,7 @@ import (
 	"github.com/mmo-dev-team/l2go-auth/internal/db"
 
 	"github.com/pashagolub/pgxmock/v4"
+
 	"golang.org/x/crypto/bcrypt"
 )
 

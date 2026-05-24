@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"runtime"
 	"strings"
 	"time"
 
@@ -22,11 +23,14 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// LoginController manages the account authentication flow, including RSA decryption,
+// password hashing verification, and session registration.
 type LoginController struct {
 	auth     *service.Authenticator
 	sessions *service.SessionRegistry
 	bans     *service.BanManager
 	kicker   service.Kicker
+	sem      chan struct{}
 }
 
 // NewLoginController provisions the auth engine layout during initialization.
@@ -36,11 +40,16 @@ func NewLoginController(
 	bans *service.BanManager,
 	kicker service.Kicker,
 ) *LoginController {
+	workers := runtime.NumCPU() * 2
+	if workers < 8 {
+		workers = 8
+	}
 	return &LoginController{
 		auth:     auth,
 		sessions: sessions,
 		bans:     bans,
 		kicker:   kicker,
+		sem:      make(chan struct{}, workers),
 	}
 }
 
@@ -51,11 +60,29 @@ func (ctrl *LoginController) HandleLogin(c *client.Client, r *network.PacketRead
 		return sendLoginFail(c, 0x01) // REASON_SYSTEM_ERROR
 	}
 
-	var decrypted [256]byte
-	username, password, err := ctrl.readLoginDataStack(r, c.ScrambledKey, &decrypted)
+	block1, block2, err := readLoginBlocks(r)
+	if err != nil {
+		log.Error().Err(err).Str("ip", c.RemoteIP).Msg("Failed to read login blocks")
+		return sendLoginFail(c, 0x01)
+	}
+
+	go ctrl.processLogin(c, block1, block2)
+	return nil
+}
+
+// processLogin runs off the event loop. The login protocol is strictly
+// request/response — the client cannot send its next packet until it receives
+// our reply — so the connection-state mutations here are safely ordered before
+// the next OnTraffic for this connection. All replies go out via AsyncWrite.
+func (ctrl *LoginController) processLogin(c *client.Client, block1, block2 []byte) {
+	ctrl.sem <- struct{}{}
+	defer func() { <-ctrl.sem }()
+
+	username, password, err := decodeCredentials(c.ScrambledKey, block1, block2)
 	if err != nil {
 		log.Error().Err(err).Str("ip", c.RemoteIP).Msg("Failed to decode cipher identity structures")
-		return sendLoginFail(c, 0x01)
+		_ = sendLoginFail(c, 0x01)
+		return
 	}
 
 	account, err := ctrl.auth.Authenticate(context.Background(), username, password, c.RemoteIP)
@@ -69,17 +96,20 @@ func (ctrl *LoginController) HandleLogin(c *client.Client, r *network.PacketRead
 		ctrl.bans.RecordFailure(ipAddr)
 
 		if errors.Is(err, service.ErrAccountBanned) {
-			return c.SendAndClose(ServerLoginBanned, func(w *network.PacketWriter) {
+			_ = c.SendAndCloseAsync(ServerLoginBanned, func(w *network.PacketWriter) {
 				w.WriteByte(0x20) // Banned payload reason code
 			})
+			return
 		}
-		return sendLoginFail(c, getFailReasonFromError(err))
+		_ = sendLoginFail(c, getFailReasonFromError(err))
+		return
 	}
 
 	metrics.LoginAttempts.WithLabelValues("success", "").Inc()
 	kickOld, allow := ctrl.sessions.TryRegister(username)
 	if !allow {
-		return sendLoginFail(c, 0x07) // REASON_ACCOUNT_IN_USE
+		_ = sendLoginFail(c, 0x07) // REASON_ACCOUNT_IN_USE
+		return
 	}
 
 	if kickOld {
@@ -104,7 +134,7 @@ func (ctrl *LoginController) HandleLogin(c *client.Client, r *network.PacketRead
 	c.State = client.StateAuthedLogin
 	c.LastServer = account.LastServer
 
-	c.Send(ServerLoginOK, func(w *network.PacketWriter) {
+	_ = c.SendAsync(ServerLoginOK, func(w *network.PacketWriter) {
 		w.WriteInt32(c.SessionKey.LoginOkID1)
 		w.WriteInt32(c.SessionKey.LoginOkID2)
 		w.WriteInt32(0x00)
@@ -117,29 +147,32 @@ func (ctrl *LoginController) HandleLogin(c *client.Client, r *network.PacketRead
 			w.WriteInt32(0x00)
 		}
 	})
-
-	return nil
 }
 
-func (ctrl *LoginController) readLoginDataStack(
-	r *network.PacketReader,
-	key *crypto.ScrambledKey,
-	decrypted *[256]byte,
-) (string, string, error) {
-	block1, err := r.ReadBytes(128)
+// readLoginBlocks copies the one or two RSA-encrypted credential blocks out of
+// the pooled reader so they survive past the handler return.
+func readLoginBlocks(r *network.PacketReader) (block1, block2 []byte, err error) {
+	b1, err := r.ReadBytes(128)
 	if err != nil {
-		return "", "", err
+		return nil, nil, err
 	}
+	block1 = append([]byte(nil), b1...)
 
-	newMethod := r.ReadableBytes() >= 128
-
-	var block2 []byte
-	if newMethod {
-		block2, err = r.ReadBytes(128)
-		if err != nil {
-			return "", "", err
+	if r.ReadableBytes() >= 128 {
+		b2, rErr := r.ReadBytes(128)
+		if rErr != nil {
+			return nil, nil, rErr
 		}
+		block2 = append([]byte(nil), b2...)
 	}
+
+	return block1, block2, nil
+}
+
+// decodeCredentials RSA-decrypts the credential blocks and extracts the
+// username/password. block2 == nil selects the legacy single-block layout.
+func decodeCredentials(key *crypto.ScrambledKey, block1, block2 []byte) (string, string, error) {
+	var decrypted [256]byte
 
 	part1, err := crypto.RSADecrypt(key, block1)
 	if err != nil {
@@ -149,7 +182,7 @@ func (ctrl *LoginController) readLoginDataStack(
 
 	var username, password string
 
-	if newMethod {
+	if block2 != nil {
 		start := time.Now()
 		part2, nErr := crypto.RSADecrypt(key, block2)
 		metrics.RSADecryptDuration.Observe(time.Since(start).Seconds())
@@ -200,7 +233,7 @@ func cleanBytesToString(b []byte) string {
 }
 
 func sendLoginFail(c *client.Client, reason byte) error {
-	return c.SendAndClose(ServerLoginFail, func(w *network.PacketWriter) {
+	return c.SendAndCloseAsync(ServerLoginFail, func(w *network.PacketWriter) {
 		w.WriteByte(reason)
 	})
 }

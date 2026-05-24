@@ -11,37 +11,44 @@ import (
 
 const cryptKeysSize = 20 // Number of pre-generated keys in the pool
 
-var cryptKeys [cryptKeysSize][16]byte // Pool of 128-bit Blowfish keys
+var loginCryptKeys, gameCryptKeys [cryptKeysSize][16]byte // Pools of 128-bit Blowfish keys
 
 var suffixKey = [8]byte{0xc8, 0x27, 0x93, 0x01, 0xa1, 0x6c, 0x31, 0x97} // Static suffix for Blowfish keys (8 bytes)
 
 // GetRandomBlowFishKey returns a random Blowfish key slice from the pre-generated pool.
 // It uses the provided index to guarantee a fast, constant-time and lock-free lookup.
 func GetRandomBlowFishKey(idx int) []byte {
-	return cryptKeys[uint(idx)%uint(cryptKeysSize)][:]
+	return loginCryptKeys[uint(idx)%uint(cryptKeysSize)][:]
 }
 
 // GenerateLoginBlowFishKeys populates the key pool with secure random keys for Login server use.
 // This should be called once during the server initialization.
 func GenerateLoginBlowFishKeys() {
+	var entropy [cryptKeysSize * 16]byte
+	if _, err := rand.Read(entropy[:]); err != nil {
+		panic("crypto: failed to generate secure login blowfish keys: " + err.Error())
+	}
 	for i := 0; i < cryptKeysSize; i++ {
-		if _, err := rand.Read(cryptKeys[i][:]); err != nil {
-			panic("crypto: failed to generate secure blowfish keys: " + err.Error())
-		}
+		copy(loginCryptKeys[i][:], entropy[i*16:(i+1)*16])
 	}
 }
 
-// GenerateGameBlowFishKey generates a unique 16-byte Blowfish key for a specific session.
-// The first 8 bytes are cryptographically secure random data, and the last 8 bytes are the static suffix.
-func GenerateGameBlowFishKey() ([16]byte, error) {
-	var key [16]byte
+// GetRandomGameBlowFishKey returns a random Blowfish key slice from the pre-generated pool for Game server use.
+// It uses the provided index to guarantee a fast, constant-time and lock-free lookup.
+func GetRandomGameBlowFishKey(idx int) []byte {
+	return gameCryptKeys[uint(idx)%uint(cryptKeysSize)][:]
+}
 
-	// 1. Generate the first 8 bytes (the dynamic part of the key for session security)
-	if _, err := rand.Read(key[0:8]); err != nil {
-		return key, err
+// GenerateGameBlowFishKeys populates the key pool with secure random keys for Game server use.
+// Each key consists of 8 random bytes followed by a static 8-byte suffix.
+// This should be called once during the server initialization.
+func GenerateGameBlowFishKeys() {
+	var entropy [cryptKeysSize * 8]byte
+	if _, err := rand.Read(entropy[:]); err != nil {
+		panic("crypto: failed to generate first part of secure game blowfish keys: " + err.Error())
 	}
-
-	// 2. Copy the static suffix into the remaining 8 bytes
-	copy(key[8:16], suffixKey[:])
-	return key, nil
+	for i := 0; i < cryptKeysSize; i++ {
+		copy(gameCryptKeys[i][0:8], entropy[i*8:(i+1)*8])
+		copy(gameCryptKeys[i][8:16], suffixKey[:])
+	}
 }
