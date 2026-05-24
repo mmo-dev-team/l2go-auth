@@ -12,6 +12,8 @@ import (
 	"github.com/mmo-dev-team/l2go-auth/internal/service"
 
 	"github.com/mmo-dev-team/l2go-auth/pkg/network"
+
+	"github.com/rs/zerolog/log"
 )
 
 type ServerInitController struct {
@@ -119,6 +121,12 @@ func (ctrl *ServerInitController) HandleInit(gsc *client.GameServerClient, r *ne
 	}
 
 	ctrl.ServerSvc.Register(&srvConfig)
+
+	log.Info().
+		Int32("server_id", int32(serverID)).
+		Str("host", serverHost).
+		Int16("port", serverPort).
+		Msg("Game Server authenticated and registered")
 
 	gsc.Send(AuthResponse, func(w *network.PacketWriter) {
 		w.WriteByte(serverID)

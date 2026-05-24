@@ -42,8 +42,8 @@ type Client struct {
 	State        State
 }
 
-// Send constructs a packet with the given opcode and body, encrypts it, and sends it to the client.
-func (c *Client) Send(opcode byte, build func(w *network.PacketWriter)) error {
+// SendAsync sends a packet to the client asynchronously.
+func (c *Client) SendAsync(opcode byte, build func(w *network.PacketWriter)) error {
 	w := network.GetPacketWriter()
 	defer network.PutPacketWriter(w)
 
@@ -55,18 +55,27 @@ func (c *Client) Send(opcode byte, build func(w *network.PacketWriter)) error {
 
 	w.PrependLength()
 
-	if _, err := c.Conn.Write(w.Bytes()); err != nil {
-		return err
-	}
-
-	c.LastActivity = time.Now()
-	return nil
+	out := append([]byte(nil), w.Bytes()...)
+	return c.Conn.AsyncWrite(out, nil)
 }
 
-// SendAndClose sends a packet and then immediately closes the client connection.
-func (c *Client) SendAndClose(opcode byte, build func(w *network.PacketWriter)) error {
-	c.Send(opcode, build)
-	return c.Conn.Close()
+// SendAndCloseAsync sends a packet asynchronously and closes the connection.
+func (c *Client) SendAndCloseAsync(opcode byte, build func(w *network.PacketWriter)) error {
+	w := network.GetPacketWriter()
+	defer network.PutPacketWriter(w)
+
+	w.WriteByte(opcode)
+
+	build(w)
+
+	c.Crypt.Encrypt(w)
+
+	w.PrependLength()
+
+	out := append([]byte(nil), w.Bytes()...)
+	return c.Conn.AsyncWrite(out, func(con gnet.Conn, _ error) error {
+		return con.Close()
+	})
 }
 
 // Close gracefully terminates the client connection.

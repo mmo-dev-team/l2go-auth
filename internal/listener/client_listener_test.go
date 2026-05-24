@@ -10,13 +10,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/panjf2000/gnet/v2"
-
 	"github.com/mmo-dev-team/l2go-auth/internal/client"
 	"github.com/mmo-dev-team/l2go-auth/internal/middleware"
 	"github.com/mmo-dev-team/l2go-auth/internal/service"
+
 	"github.com/mmo-dev-team/l2go-auth/pkg/crypto"
 	"github.com/mmo-dev-team/l2go-auth/pkg/network"
+
+	"github.com/panjf2000/gnet/v2"
 )
 
 // MockConn implements the subset of gnet.Conn required for testing OnOpen

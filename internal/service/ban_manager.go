@@ -68,7 +68,7 @@ func (m *BanManager) IsBanned(ip netip.Addr) bool {
 			m.mu.Unlock()
 
 			go func(targetIP netip.Addr) {
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				ctx, cancel := context.WithTimeout(m.ctx, 5*time.Second)
 				defer cancel()
 				_ = m.queries.RemoveIPBan(ctx, targetIP)
 			}(ip)
@@ -95,7 +95,7 @@ func (m *BanManager) RecordFailure(ip netip.Addr) {
 		m.mu.Unlock()
 
 		go func(targetIP netip.Addr, banExpiry time.Time) {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(m.ctx, 5*time.Second)
 			defer cancel()
 			_ = m.queries.AddIPBan(ctx, db.AddIPBanParams{
 				Ip:         targetIP,

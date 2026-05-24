@@ -45,7 +45,6 @@ func main() {
 	cfg := config.New()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	// Start session garbage collection with a 120-second interval
 	session.StartGC(120*time.Second, ctx.Done())
@@ -76,8 +75,8 @@ func main() {
 	serverList := service.NewServerList()
 	authenticator := service.NewAuthenticator(queries, cfg.Account.AutoCreateAcc)
 	sessions := service.NewSessionRegistry()
-	bans := service.NewBanManager(context.Background(), queries, cfg.Account.AttemptsLoginCount)
-	limiter := middleware.NewRateLimiter(5, time.Second) // Limit: 5 connections/sec per IP
+	bans := service.NewBanManager(ctx, queries, cfg.Account.AttemptsLoginCount)
+	limiter := middleware.NewRateLimiter(cfg.LoginRateLimit, time.Second)
 	kickManager := service.NewKickManager()
 
 	clientListener := listener.NewClientListener(
@@ -135,7 +134,10 @@ func main() {
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
 	<-sigChan
+	cancel()
+
 	log.Info().Msg("Shutdown signal received, initiating graceful shutdown...")
 
 	// Allow up to 30 seconds for graceful shutdown

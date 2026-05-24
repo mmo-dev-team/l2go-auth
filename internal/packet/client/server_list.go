@@ -17,6 +17,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// ServerDashboardController handles the request for the game server list
+// and provides account-specific character counts for each server.
 type ServerDashboardController struct {
 	ServerSvc *service.ServerList
 	Kicker    service.Kicker
@@ -27,7 +29,7 @@ var (
 )
 
 // NewServerDashboardController provisions a reusable controller instance during boot initialization.
-func NewDashboardController(serverSvc *service.ServerList, kicker service.Kicker) *ServerDashboardController {
+func NewServerDashboardController(serverSvc *service.ServerList, kicker service.Kicker) *ServerDashboardController {
 	return &ServerDashboardController{
 		ServerSvc: serverSvc,
 		Kicker:    kicker,
@@ -65,7 +67,7 @@ func (ctrl *ServerDashboardController) HandleServerList(c *client.Client, r *net
 		ctrl.Kicker.RequestCharacters(c.Account, c.AccountID)
 	}
 
-	c.Send(ServerServerList, func(w *network.PacketWriter) {
+	c.SendAsync(ServerServerList, func(w *network.PacketWriter) {
 		w.WriteByte(byte(snap.Count))
 		w.WriteByte(byte(c.LastServer))
 
@@ -80,18 +82,13 @@ func (ctrl *ServerDashboardController) HandleServerList(c *client.Client, r *net
 				w.WriteByte(octets[1])
 				w.WriteByte(octets[2])
 				w.WriteByte(octets[3])
-			} else {
-				w.WriteByte(127)
-				w.WriteByte(0)
-				w.WriteByte(0)
-				w.WriteByte(1)
 			}
 
 			w.WriteInt32(srv.Port)
 			w.WriteByte(0x00) // Age Limit
 
 			if srv.Pvp {
-				w.WriteByte(0x01)
+				w.WriteByte(0x01) // PVP server enabled
 			} else {
 				w.WriteByte(0x00)
 			}
@@ -101,13 +98,13 @@ func (ctrl *ServerDashboardController) HandleServerList(c *client.Client, r *net
 
 			status := srv.Status
 			if srv.CurrentPlayers >= srv.MaxPlayers {
-				status = 0
+				status = 0 // Server Full status
 			}
 			w.WriteByte(status)
 			w.WriteInt32(srv.ServerType)
 
 			if srv.Brackets {
-				w.WriteByte(0x01)
+				w.WriteByte(0x01) // Show brackets in server name
 			} else {
 				w.WriteByte(0x00)
 			}

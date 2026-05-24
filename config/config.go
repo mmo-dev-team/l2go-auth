@@ -18,6 +18,7 @@ type Config struct {
 	Account                *Account
 	GameServerListenerPort string
 	ClientListenerPort     string
+	LoginRateLimit         int
 }
 
 // Database holds database connection and pooling settings.
@@ -45,6 +46,7 @@ func New() *Config {
 	c := &Config{
 		GameServerListenerPort: os.Getenv("GAMESERVER_LISTENER_PORT"),
 		ClientListenerPort:     os.Getenv("CLIENT_LISTENER_PORT"),
+		LoginRateLimit:         mustAtoi("LOGIN_RATE_LIMIT"),
 		Database:               getDatabaseSettings(),
 		Account:                getAccountSettings(),
 	}
