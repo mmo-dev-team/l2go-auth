@@ -50,8 +50,18 @@ func NewBanManager(ctx context.Context, queries *db.Queries, maxAttempts int) *B
 	return bm
 }
 
+// IsBanned checks if a given IP address is currently banned. Loopback (127.0.0.1 /
+// ::1) is never banned — it is the host itself (local tools, load tests) and must not
+// be able to lock itself out via the brute-force throttle.
+
+
 // IsBanned checks if a given IP address is currently banned.
+// Loopback (127.0.0.1 / ::1) is never banned.
 func (m *BanManager) IsBanned(ip netip.Addr) bool {
+	if ip.IsLoopback() {
+		return false
+	}
+
 	m.mu.RLock()
 	expiry, ok := m.ipBans[ip]
 	m.mu.RUnlock()
@@ -83,6 +93,10 @@ func (m *BanManager) IsBanned(ip netip.Addr) bool {
 
 // RecordFailure increments the failure count for an IP and applies a ban if the threshold is reached.
 func (m *BanManager) RecordFailure(ip netip.Addr) {
+	if ip.IsLoopback() {
+		return // never throttle/ban the host itself
+	}
+
 	m.mu.Lock()
 
 	m.attempts[ip]++

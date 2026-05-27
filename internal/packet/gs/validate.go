@@ -6,6 +6,8 @@
 package gs
 
 import (
+	"strings"
+
 	"github.com/mmo-dev-team/l2go-auth/internal/client"
 	"github.com/mmo-dev-team/l2go-auth/internal/session"
 
@@ -40,7 +42,7 @@ func HandleValidate(gsc *client.GameServerClient, r *network.PacketReader) error
 
 	sess, ok := session.ValidateAndDelete(LoginOkID1)
 	success := ok &&
-		sess.Account == account &&
+		strings.EqualFold(sess.Account, account) &&
 		sess.Key.CheckPlayPair(LoginOkID1, LoginOkID2, PlayOkID1, PlayOkID2)
 
 	statusByte := byte(0)
