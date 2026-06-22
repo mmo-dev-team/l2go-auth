@@ -21,8 +21,6 @@ import (
 
 // GameServerListener handles network connections from game servers.
 type GameServerListener struct {
-	serverMu sync.Mutex
-	timeout  time.Duration
 	*gnet.BuiltinEventEngine
 	Engine     *gnet.Engine
 	serverList *service.ServerList
@@ -30,6 +28,8 @@ type GameServerListener struct {
 	registry   *gs.Registry
 	servers    map[gnet.Conn]*client.GameServerClient
 	stopCh     chan struct{}
+	timeout    time.Duration
+	serverMu   sync.Mutex
 }
 
 // NewGameServerListener creates a new instance of GameServerListener.
@@ -73,10 +73,10 @@ func (gsl *GameServerListener) OnOpen(c gnet.Conn) (out []byte, action gnet.Acti
 	ip := getIP(c)
 
 	gsc := &client.GameServerClient{
-		Conn:         c,
-		RemoteIP:     ip,
-		LastActivity: time.Now(),
+		Conn:     c,
+		RemoteIP: ip,
 	}
+	gsc.Touch()
 
 	gsl.serverMu.Lock()
 	gsl.servers[c] = gsc
@@ -135,7 +135,7 @@ func (gsl *GameServerListener) OnTraffic(c gnet.Conn) (action gnet.Action) {
 			return gnet.Close
 		}
 
-		gsc.LastActivity = time.Now()
+		gsc.Touch()
 
 		buf = buf[size:]
 		c.Discard(size)
@@ -171,13 +171,13 @@ func (gsl *GameServerListener) OnShutdown(_ gnet.Engine) {
 }
 
 // OnTick is called periodically to perform maintenance tasks.
-// It checks for timed-out game server connections.
 func (gsl *GameServerListener) OnTick() (delay time.Duration, action gnet.Action) {
-	now := time.Now()
+	nowNanos := time.Now().UnixNano()
+	timeout := int64(gsl.timeout)
 
 	gsl.serverMu.Lock()
 	for conn, cl := range gsl.servers {
-		if now.Sub(cl.LastActivity) > gsl.timeout {
+		if nowNanos-cl.LastActivityNanos() > timeout {
 			log.Warn().Str("ip", cl.RemoteIP).Msg("Connection timeout")
 			conn.Close()
 			delete(gsl.servers, conn)

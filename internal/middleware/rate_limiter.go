@@ -6,32 +6,73 @@
 package middleware
 
 import (
+	"net/netip"
 	"sync"
 	"time"
 )
 
-// RateLimiter implements a simple sliding-window rate limiting mechanism for IP addresses.
+const rlShardCount = 64 // Must be a power of 2
+
+// rlEntry is a fixed-window counter.
+type rlEntry struct {
+	windowStart int64 // Unix-nanos start of the current window
+	count       int32
+}
+
+// rlShard isolates a subset of addresses under its own lock to cut contention.
+type rlShard struct {
+	entries map[netip.Addr]rlEntry
+	mu      sync.Mutex
+}
+
+// RateLimiter implements a sharded fixed-window rate limiter keyed by IP address.
 type RateLimiter struct {
-	mu       sync.Mutex
-	attempts map[string][]time.Time
-	limit    int
-	window   time.Duration
+	shards [rlShardCount]*rlShard
+	window time.Duration
+	limit  int32
 }
 
 // NewRateLimiter creates a new RateLimiter with the specified limit and time window.
 func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
 	rl := &RateLimiter{
-		attempts: make(map[string][]time.Time),
-		limit:    limit,
-		window:   window,
+		limit:  int32(limit),
+		window: window,
+	}
+	for i := range rl.shards {
+		rl.shards[i] = &rlShard{entries: make(map[netip.Addr]rlEntry, 1024)}
 	}
 	rl.startCleanup()
 	return rl
 }
 
+// Allow records an attempt for ip and reports whether it is within the limit.
+// It is safe for concurrent use and runs in O(1) with no steady-state allocations.
+func (r *RateLimiter) Allow(ip netip.Addr) bool {
+	now := time.Now().UnixNano()
+	win := int64(r.window)
+
+	sh := r.shardFor(ip)
+	sh.mu.Lock()
+
+	e := sh.entries[ip]
+	if now-e.windowStart >= win {
+		e.windowStart = now
+		e.count = 0
+	}
+
+	if e.count >= r.limit {
+		sh.mu.Unlock()
+		return false
+	}
+
+	e.count++
+	sh.entries[ip] = e
+	sh.mu.Unlock()
+	return true
+}
+
 func (r *RateLimiter) startCleanup() {
 	go func() {
-		// Periodically clean up expired entries every 10 minutes
 		ticker := time.NewTicker(10 * time.Minute)
 		defer ticker.Stop()
 
@@ -41,63 +82,26 @@ func (r *RateLimiter) startCleanup() {
 	}()
 }
 
+// cleanup evicts addresses whose window has fully expired.
 func (r *RateLimiter) cleanup() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	now := time.Now()
-	for ip, attempts := range r.attempts {
-		valid := attempts[:0]
-		for _, t := range attempts {
-			if now.Sub(t) <= r.window {
-				valid = append(valid, t)
+	cutoff := time.Now().UnixNano() - int64(r.window)
+	for _, sh := range r.shards {
+		sh.mu.Lock()
+		for ip, e := range sh.entries {
+			if e.windowStart < cutoff {
+				delete(sh.entries, ip)
 			}
 		}
-		if len(valid) == 0 {
-			delete(r.attempts, ip)
-		} else {
-			r.attempts[ip] = valid
-		}
+		sh.mu.Unlock()
 	}
 }
 
-// IsLimited checks if the provided IP address has exceeded the rate limit.
-func (r *RateLimiter) IsLimited(ip string) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	now := time.Now()
-	attempts := r.attempts[ip]
-
-	count := 0
-	for _, t := range attempts {
-		if now.Sub(t) <= r.window {
-			count++
-		}
+func (r *RateLimiter) shardFor(ip netip.Addr) *rlShard {
+	b := ip.As16() // [16]byte by value — no allocation
+	var h uint32 = 2166136261
+	for i := 0; i < 16; i++ {
+		h ^= uint32(b[i])
+		h *= 16777619
 	}
-	return count >= r.limit
-}
-
-// AddAttempt records a new attempt for the given IP address.
-func (r *RateLimiter) AddAttempt(ip string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	now := time.Now()
-	attempts := r.attempts[ip]
-
-	valid := attempts[:0]
-	for _, t := range attempts {
-		if now.Sub(t) <= r.window {
-			valid = append(valid, t)
-		}
-	}
-	r.attempts[ip] = append(valid, now)
-}
-
-// Reset clears all recorded attempts for the specified IP address.
-func (r *RateLimiter) Reset(ip string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	delete(r.attempts, ip)
+	return r.shards[h&(rlShardCount-1)]
 }

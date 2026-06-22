@@ -42,3 +42,14 @@ var (
 		Buckets: prometheus.DefBuckets,
 	})
 )
+
+var (
+	LoginSuccess        = LoginAttempts.WithLabelValues("success", "")
+	LoginFailInvalidPwd = LoginAttempts.WithLabelValues("fail", "invalid_password")
+	LoginFailNotFound   = LoginAttempts.WithLabelValues("fail", "account_not_found")
+	LoginFailBanned     = LoginAttempts.WithLabelValues("fail", "account_banned")
+	LoginFailSystem     = LoginAttempts.WithLabelValues("fail", "system_error")
+
+	DBFindAccount     = DBQueryDuration.WithLabelValues("FindAccount")
+	DBRegisterAccount = DBQueryDuration.WithLabelValues("RegisterAccount")
+)

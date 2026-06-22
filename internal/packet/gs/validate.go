@@ -41,6 +41,7 @@ func HandleValidate(gsc *client.GameServerClient, r *network.PacketReader) error
 	}
 
 	sess, ok := session.ValidateAndDelete(LoginOkID1)
+	// Account is compared case-insensitively.
 	success := ok &&
 		strings.EqualFold(sess.Account, account) &&
 		sess.Key.CheckPlayPair(LoginOkID1, LoginOkID2, PlayOkID1, PlayOkID2)

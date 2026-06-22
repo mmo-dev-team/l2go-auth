@@ -43,6 +43,7 @@ func TestClientListener_OnOpen(t *testing.T) {
 	// 1. Setup crypto dependencies
 	crypto.InitRSAPool(2)
 	crypto.GenerateLoginBlowFishKeys()
+	crypto.GenerateGameBlowFishKeys()
 
 	// 2. Setup mock dependencies
 	l := &ClientListener{

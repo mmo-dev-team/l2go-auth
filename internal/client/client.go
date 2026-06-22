@@ -6,6 +6,9 @@
 package client
 
 import (
+	"net/netip"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	loginCrypto "github.com/mmo-dev-team/l2go-auth/internal/crypto"
@@ -29,17 +32,44 @@ const (
 
 // Client represents a connected user on the Login Server.
 type Client struct {
-	LastActivity time.Time
 	Conn         gnet.Conn
 	Crypt        *loginCrypto.Crypt
 	ScrambledKey *crypto.ScrambledKey
-	SessionKey   crypto.SessionKey
+	RemoteAddr   netip.Addr
 	RemoteIP     string
 	Account      string
+	lastActivity atomic.Int64
 	AccountID    int64
+	SessionKey   crypto.SessionKey
+	idMu         sync.RWMutex
 	LastServer   int32
 	SessionID    int32
 	State        State
+}
+
+// Touch records the current time as the last activity timestamp (atomic, lock-free).
+func (c *Client) Touch() {
+	c.lastActivity.Store(time.Now().UnixNano())
+}
+
+// LastActivityNanos returns the last activity timestamp as Unix nanoseconds.
+func (c *Client) LastActivityNanos() int64 {
+	return c.lastActivity.Load()
+}
+
+// SetAccount publishes the authenticated account name under the identity.
+func (c *Client) SetAccount(account string) {
+	c.idMu.Lock()
+	c.Account = account
+	c.idMu.Unlock()
+}
+
+// AccountName reads the account name under the identity lock.
+func (c *Client) AccountName() string {
+	c.idMu.RLock()
+	a := c.Account
+	c.idMu.RUnlock()
+	return a
 }
 
 // SendAsync sends a packet to the client asynchronously.

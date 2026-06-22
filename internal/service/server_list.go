@@ -11,6 +11,15 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// MaxSupportedServers defines the upper bound of Game Servers in the cluster.
+const MaxSupportedServers = 32
+
+// Game Server status attribute codes carried in the ServerStatus packet.
+const (
+	InfoTypeStatus         = 0x01 // Server availability (Up/Down/Busy)
+	InfoTypeCurrentPlayers = 0x02 // Current online player count
+)
+
 // Server represents a Game Server and its current state.
 type Server struct {
 	IP             string
@@ -30,15 +39,12 @@ type ServerSnapshot struct {
 	Count   int
 }
 
-// MaxSupportedServers defines the upper bound of Game Servers in the cluster.
-const MaxSupportedServers = 16
-
 // ServerList manages the collection of registered Game Servers and account character counts.
 type ServerList struct {
-	mu         sync.RWMutex
-	servers    [MaxSupportedServers]Server
-	active     [MaxSupportedServers]bool
 	charCounts map[string][MaxSupportedServers]byte
+	servers    [MaxSupportedServers]Server
+	mu         sync.RWMutex
+	active     [MaxSupportedServers]bool
 }
 
 // NewServerList creates a new ServerList instance.
@@ -96,9 +102,9 @@ func (s *ServerList) UpdateStatus(id int32, infoType int, value int32) {
 
 	srv := &s.servers[id]
 	switch infoType {
-	case 0x01: // Status update (Up/Down/Busy)
+	case InfoTypeStatus:
 		srv.Status = byte(value)
-	case 0x02: // Current Players update
+	case InfoTypeCurrentPlayers:
 		srv.CurrentPlayers = int16(value)
 	}
 }

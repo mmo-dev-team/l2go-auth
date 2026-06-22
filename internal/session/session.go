@@ -12,6 +12,8 @@ import (
 	"github.com/mmo-dev-team/l2go-auth/pkg/crypto"
 )
 
+const sessionShardCount = 64 // Must be a power of 2
+
 // Session represents a temporary authentication session for account handoff to a Game Server.
 type Session struct {
 	ExpiresAt time.Time
@@ -21,30 +23,45 @@ type Session struct {
 	ServerID  int32
 }
 
-var (
-	sessions sync.Map
-)
+// shard isolates a subset of sessions under its own lock.
+type shard struct {
+	sessions map[int32]*Session
+	mu       sync.Mutex
+}
+
+var shards [sessionShardCount]*shard
+
+func init() {
+	for i := range shards {
+		shards[i] = &shard{sessions: make(map[int32]*Session, 256)}
+	}
+}
+
+func shardFor(id int32) *shard {
+	return shards[uint32(id)&(sessionShardCount-1)]
+}
 
 // Put stores a session by its ID.
 func Put(id int32, session *Session) {
-	sessions.Store(id, session)
+	sh := shardFor(id)
+	sh.mu.Lock()
+	sh.sessions[id] = session
+	sh.mu.Unlock()
 }
 
 // ValidateAndDelete retrieves and removes a session by its ID if it exists and is not expired.
 func ValidateAndDelete(id int32) (*Session, bool) {
-	val, ok := sessions.Load(id)
-	if !ok {
+	sh := shardFor(id)
+	sh.mu.Lock()
+	session, ok := sh.sessions[id]
+	if ok {
+		delete(sh.sessions, id)
+	}
+	sh.mu.Unlock()
+
+	if !ok || time.Now().After(session.ExpiresAt) {
 		return nil, false
 	}
-
-	session := val.(*Session)
-
-	if time.Now().After(session.ExpiresAt) {
-		sessions.Delete(id)
-		return nil, false
-	}
-
-	sessions.Delete(id)
 	return session, true
 }
 
@@ -57,15 +74,15 @@ func StartGC(interval time.Duration, stop <-chan struct{}) {
 			select {
 			case <-t.C:
 				now := time.Now()
-
-				sessions.Range(func(key, value interface{}) bool {
-					session := value.(*Session)
-					if now.After(session.ExpiresAt) {
-						sessions.Delete(key)
+				for _, sh := range shards {
+					sh.mu.Lock()
+					for id, session := range sh.sessions {
+						if now.After(session.ExpiresAt) {
+							delete(sh.sessions, id)
+						}
 					}
-					return true
-				})
-
+					sh.mu.Unlock()
+				}
 			case <-stop:
 				return
 			}
