@@ -24,7 +24,7 @@ production-grade reliability using an event-driven networking model.
     * **Fuzz Tested:** The packet parser has been stress-tested with over 7 million iterations of random data (Go
       Fuzzing) to ensure zero panics from malformed packets.
     * **Anti-Bruteforce:** Integrated `BanManager` that tracks failed attempts and automatically jails IPs.
-    * **Rate Limiting:** Built-in TCP connection rate limiting to protect against connection flood attacks.
+    * **Rate Limiting:** Sharded (64 shards), fixed-window per-IP connection rate limiting to protect against connection flood attacks with minimal lock contention.
 * **Optimized Cryptography:**
     * Pre-generated **RSA Key Pool** (32 keys) to prevent CPU spikes during mass login events.
     * Custom Blowfish implementation compliant with the L2 protocol.
@@ -90,7 +90,7 @@ The application is configured using environment variables. You can find a templa
 | `DB_MAX_CONN_IDLE_TIME` | Maximum amount of time a connection may be idle (seconds) | `60` |
 | `ATTEMPTS_LOGIN_COUNT` | Failed login attempts before IP ban | `5` |
 | `AUTO_CREATE_ACCOUNT` | Enable/Disable auto account creation | `true` |
-| `LOGIN_RATE_LIMIT` | Max login requests per second | `10` |
+| `LOGIN_RATE_LIMIT` | Max connection attempts per IP within a 30-second window | `10` |
 
 ### Running the Server
 
