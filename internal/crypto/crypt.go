@@ -13,14 +13,17 @@ import (
 	"github.com/mmo-dev-team/l2go-auth/pkg/network"
 )
 
+// Crypt handles packet encryption and decryption using the Blowfish algorithm and a custom XOR-based checksum.
+type Crypt struct {
+	cipher     *crypto.BlowfishCipher
+	updatedKey bool
+}
+
 // StaticKey is the default blowfish key used for the initial handshake.
 var StaticKey = []byte{0x6b, 0x60, 0xcb, 0x5b, 0x82, 0xce, 0x90, 0xb1, 0xcc, 0x2b, 0x6c, 0x55, 0x6c, 0x6c, 0x6c, 0x6c}
 
-// Crypt handles packet encryption and decryption using the Blowfish algorithm and a custom XOR-based checksum.
-type Crypt struct {
-	updatedKey bool
-	cipher     *crypto.BlowfishCipher
-}
+// staticCipher is the read-only Blowfish cipher for the initial handshake (Init) packet.
+var staticCipher = crypto.NewBlowfishCipher(StaticKey)
 
 // NewCrypt creates a new Crypt instance with the given Blowfish key.
 func NewCrypt(key []byte) *Crypt {
@@ -71,6 +74,28 @@ func (c *Crypt) Decrypt(data []byte, size int) bool {
 
 	c.cipher.DecipherRange(data, 0, size)
 	return true
+}
+
+// EncryptStatic encrypts the initial Init packet in place using the shared static Blowfish cipher.
+func EncryptStatic(w *network.PacketWriter) {
+	payloadLen := len(w.Bytes()) - 2 // Exclude the 2-byte packet length header
+
+	reserve := 16 // Init packet reserves 16 bytes for Blowfish padding and XOR key
+	w.Extend(reserve)
+	payloadLen += reserve
+
+	pad := 8 - (payloadLen % 8) // Blowfish requires 8-byte block alignment
+	if pad != 8 {
+		w.Extend(pad)
+		payloadLen += pad
+	}
+
+	data := w.Bytes()[2:] // Skip length header
+
+	xorKey := rand.Uint32()
+	encXorPass(data, uint32(payloadLen), xorKey)
+
+	staticCipher.CipherRange(data, 0, payloadLen)
 }
 
 // encXorPass applies a custom XOR-based checksum and obfuscation pass to the data.

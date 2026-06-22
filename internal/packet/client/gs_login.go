@@ -19,7 +19,7 @@ import (
 )
 
 // GameServerLogin creates a handler for the game server login request.
-func GameServerLogin(auth *service.Authenticator) Handler {
+func GameServerLogin(auth *service.Authenticator, handoffTTL time.Duration) Handler {
 	return func(c *client.Client, r *network.PacketReader) error {
 		if c.State != client.StateServerList {
 			log.Warn().Str("ip", c.RemoteIP).Msg("GameServerLogin before server list")
@@ -55,7 +55,7 @@ func GameServerLogin(auth *service.Authenticator) Handler {
 		}
 
 		s := &session.Session{
-			ExpiresAt: time.Now().Add(1 * time.Minute),
+			ExpiresAt: time.Now().Add(handoffTTL),
 			Key:       &c.SessionKey,
 			ServerID:  serverID,
 			AccountID: c.AccountID,

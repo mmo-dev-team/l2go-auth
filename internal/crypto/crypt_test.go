@@ -31,6 +31,27 @@ func TestCryptEncryptionPadding(t *testing.T) {
 	}
 }
 
+func TestEncryptStaticPadding(t *testing.T) {
+	w := network.GetPacketWriter()
+	defer network.PutPacketWriter(w)
+
+	w.WriteByte(0x00)
+	w.WriteInt32(12345)
+	w.PrependLength()
+
+	before := len(w.Bytes())
+	EncryptStatic(w)
+
+	data := w.Bytes()
+	payloadSize := len(data) - 2
+	if payloadSize%8 != 0 {
+		t.Errorf("Expected payload size to be multiple of 8, got %d", payloadSize)
+	}
+	if len(data) <= before {
+		t.Errorf("Expected EncryptStatic to grow the buffer by reserve+padding, before=%d after=%d", before, len(data))
+	}
+}
+
 func TestCryptDecryptSizeValidation(t *testing.T) {
 	key := StaticKey
 	crypt := NewCrypt(key)

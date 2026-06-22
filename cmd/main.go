@@ -47,7 +47,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Start session garbage collection with a 120-second interval
-	session.StartGC(120*time.Second, ctx.Done())
+	session.StartGC(time.Duration(120)*time.Second, ctx.Done())
 
 	cfgDB := cfg.Database
 	dbPool, err := database.OpenPool(
@@ -75,8 +75,8 @@ func main() {
 	serverList := service.NewServerList()
 	authenticator := service.NewAuthenticator(queries, cfg.Account.AutoCreateAcc)
 	sessions := service.NewSessionRegistry()
-	bans := service.NewBanManager(ctx, queries, cfg.Account.AttemptsLoginCount)
-	limiter := middleware.NewRateLimiter(cfg.LoginRateLimit, time.Second)
+	bans := service.NewBanManager(ctx, queries, cfg.Account.AttemptsLoginCount, time.Duration(300)*time.Second)
+	limiter := middleware.NewRateLimiter(cfg.LoginRateLimit, time.Duration(30)*time.Second)
 	kickManager := service.NewKickManager()
 
 	clientListener := listener.NewClientListener(
@@ -87,11 +87,12 @@ func main() {
 		bans,
 		limiter,
 		kickManager,
-		30*time.Second, // 30-second client connection timeout
+		time.Duration(30)*time.Second, // 30-second client connection timeout
+		time.Duration(30)*time.Second, // 30-second client handoff TTL
 	)
 	log.Info().Msg("Client listener initialized")
 
-	gameServerListener := listener.NewGameServerListener(serverList, sessions, 30*time.Second) // 30-second game server connection timeout
+	gameServerListener := listener.NewGameServerListener(serverList, sessions, time.Duration(30)*time.Second)
 	log.Info().Msg("Game server listener initialized")
 
 	// Wire kick manager

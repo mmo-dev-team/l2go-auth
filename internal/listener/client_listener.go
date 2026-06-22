@@ -27,11 +27,11 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+var globalSessionID atomic.Int32
+
 // ClientListener handles incoming network connections from game clients.
-// It manages client sessions, authentication, and packet routing.
 type ClientListener struct {
-	clientMu sync.Mutex
-	timeout  time.Duration
+	kicker service.Kicker
 	*gnet.BuiltinEventEngine
 	Engine     *gnet.Engine
 	queries    *db.Queries
@@ -40,10 +40,11 @@ type ClientListener struct {
 	sessions   *service.SessionRegistry
 	bans       *service.BanManager
 	limiter    *middleware.RateLimiter
-	kicker     service.Kicker
 	registry   *clientPacket.Registry
 	clients    map[gnet.Conn]*client.Client
 	stopCh     chan struct{}
+	timeout    time.Duration
+	clientMu   sync.Mutex
 }
 
 // NewClientListener creates a new instance of ClientListener.
@@ -56,6 +57,7 @@ func NewClientListener(
 	limiter *middleware.RateLimiter,
 	kicker service.Kicker,
 	timeout time.Duration,
+	handoffTTL time.Duration,
 ) *ClientListener {
 	listener := &ClientListener{
 		queries:    queries,
@@ -77,7 +79,7 @@ func NewClientListener(
 	listener.registry.Register(clientPacket.ClientAuthGG, clientPacket.AuthGG)
 	listener.registry.Register(clientPacket.ClientLogin, loginCtrl.HandleLogin)
 	listener.registry.Register(clientPacket.ClientServerList, serverListCtrl.HandleServerList)
-	listener.registry.Register(clientPacket.ClientGameServerLogin, clientPacket.GameServerLogin(auth))
+	listener.registry.Register(clientPacket.ClientGameServerLogin, clientPacket.GameServerLogin(auth, handoffTTL))
 
 	return listener
 }
@@ -89,18 +91,15 @@ func (l *ClientListener) OnBoot(eng gnet.Engine) (action gnet.Action) {
 }
 
 // OnOpen is called when a new connection is opened.
-// It sends the initial server packet (Init) to the client.
 func (l *ClientListener) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 	ip := getIP(c)
+	ipAddr, _ := netip.ParseAddr(ip)
 
-	// 1. Check Rate Limit (Connection Flood Protection)
-	if l.limiter.IsLimited(ip) {
+	// 1. Connection flood protection — single atomic check-and-record per accept.
+	if !l.limiter.Allow(ipAddr) {
 		log.Warn().Str("ip", ip).Msg("Rate limit exceeded, dropping connection")
 		return nil, gnet.Close
 	}
-	l.limiter.AddAttempt(ip)
-
-	ipAddr, _ := netip.ParseAddr(ip)
 
 	if l.bans.IsBanned(ipAddr) {
 		log.Warn().Str("ip", ip).Msg("Banned IP attempt")
@@ -122,13 +121,14 @@ func (l *ClientListener) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 	cl := &client.Client{
 		Conn:         c,
 		RemoteIP:     ip,
+		RemoteAddr:   ipAddr,
 		Crypt:        crypt,
 		ScrambledKey: scrambledKey,
 		SessionKey:   *sessionKey,
 		SessionID:    sessionID,
 		State:        client.StateConnected,
-		LastActivity: time.Now(),
 	}
+	cl.Touch()
 
 	l.clientMu.Lock()
 	l.clients[c] = cl
@@ -154,8 +154,7 @@ func (l *ClientListener) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 	w.WriteBytes(secretKey)
 	w.WriteByte(0x00) // Null terminator for the key
 
-	staticCrypt := loginCrypto.NewCrypt(loginCrypto.StaticKey)
-	staticCrypt.Encrypt(w)
+	loginCrypto.EncryptStatic(w)
 
 	w.PrependLength()
 
@@ -219,7 +218,7 @@ func (l *ClientListener) OnTraffic(c gnet.Conn) (action gnet.Action) {
 			return gnet.Close
 		}
 
-		cl.LastActivity = time.Now()
+		cl.Touch()
 
 		buf = buf[size:]
 		c.Discard(size)
@@ -234,11 +233,11 @@ func (l *ClientListener) OnClose(c gnet.Conn, _ error) (action gnet.Action) {
 	cl, ok := l.clients[c]
 	if ok {
 		delete(l.clients, c)
-		if cl.Account != "" {
-			if sess, active := l.sessions.Get(cl.Account); active && sess.SessionID == cl.SessionID {
+		if account := cl.AccountName(); account != "" {
+			if sess, active := l.sessions.Get(account); active && sess.SessionID == cl.SessionID {
 				if sess.ServerID == 0 {
-					l.sessions.Unregister(cl.Account, cl.SessionID)
-					l.serverList.RemoveAccount(cl.Account)
+					l.sessions.Unregister(account, cl.SessionID)
+					l.serverList.RemoveAccount(account)
 				}
 			}
 		}
@@ -259,13 +258,13 @@ func (l *ClientListener) OnShutdown(_ gnet.Engine) {
 }
 
 // OnTick is called periodically by the engine.
-// It checks for timed-out client connections.
 func (l *ClientListener) OnTick() (delay time.Duration, action gnet.Action) {
-	now := time.Now()
+	nowNanos := time.Now().UnixNano()
+	timeout := int64(l.timeout)
 
 	l.clientMu.Lock()
 	for conn, cl := range l.clients {
-		if now.Sub(cl.LastActivity) > l.timeout {
+		if nowNanos-cl.LastActivityNanos() > timeout {
 			log.Warn().Str("ip", cl.RemoteIP).Msg("Connection timeout")
 			conn.Close()
 			delete(l.clients, conn)
@@ -283,7 +282,7 @@ func (l *ClientListener) KickAccount(username string) {
 	defer l.clientMu.Unlock()
 
 	for conn, cl := range l.clients {
-		if cl.Account == username {
+		if cl.AccountName() == username {
 			log.Info().Str("account", username).Msg("Kicking account from Login Server")
 			conn.Close()
 			delete(l.clients, conn)
@@ -298,8 +297,6 @@ func getIP(c gnet.Conn) string {
 	}
 	return c.RemoteAddr().String()
 }
-
-var globalSessionID atomic.Int32
 
 func generateSessionID() int32 {
 	return globalSessionID.Add(1) ^ int32(time.Now().UnixNano())

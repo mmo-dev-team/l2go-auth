@@ -9,6 +9,7 @@ import (
 	"context"
 	"net/netip"
 	"testing"
+	"time"
 
 	"github.com/mmo-dev-team/l2go-auth/internal/db"
 
@@ -28,7 +29,7 @@ func TestBanManager_Logic(t *testing.T) {
 
 	queries := db.New(mock)
 	maxAttempts := 3
-	bm := NewBanManager(context.Background(), queries, maxAttempts)
+	bm := NewBanManager(context.Background(), queries, maxAttempts, 15*time.Minute)
 
 	ip := netip.MustParseAddr("1.2.3.4")
 
@@ -46,7 +47,6 @@ func TestBanManager_Logic(t *testing.T) {
 		}
 
 		// 3rd failure - should trigger ban
-		// Note: RecordFailure spawns a goroutine for DB insert, we just check the internal map
 		bm.RecordFailure(ip)
 		if !bm.IsBanned(ip) {
 			t.Error("Should be banned after 3rd failure")

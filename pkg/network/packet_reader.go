@@ -173,21 +173,34 @@ func (r *PacketReader) ReadString() (string, error) {
 
 	u16len := len(raw) / 2
 
-	var u16 []uint16
-	var pBuf *[]uint16
 	if u16len <= 1024 {
-		pBuf = decodePool.Get().(*[]uint16)
-		u16 = (*pBuf)[:u16len]
-		defer decodePool.Put(pBuf)
-	} else {
-		u16 = make([]uint16, u16len)
+		pBuf := decodePool.Get().(*[]uint16)
+		u16 := (*pBuf)[:u16len]
+		for i := 0; i < u16len; i++ {
+			u16[i] = uint16(raw[2*i]) | uint16(raw[2*i+1])<<8
+		}
+		s := string(utf16.Decode(u16))
+		decodePool.Put(pBuf)
+		return s, nil
 	}
 
+	u16 := make([]uint16, u16len)
 	for i := 0; i < u16len; i++ {
 		u16[i] = uint16(raw[2*i]) | uint16(raw[2*i+1])<<8
 	}
-
 	return string(utf16.Decode(u16)), nil
+}
+
+// SkipString advances the read position past a null-terminated UTF-16LE string without allocating.
+func (r *PacketReader) SkipString() error {
+	remainder := r.buf[r.pos:]
+	for i := 0; i+1 < len(remainder); i += 2 {
+		if remainder[i] == 0 && remainder[i+1] == 0 {
+			r.pos += i + 2
+			return nil
+		}
+	}
+	return errors.New("packet: missing null terminator for string")
 }
 
 func (r *PacketReader) ensure(n int) error {

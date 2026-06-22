@@ -19,18 +19,20 @@ import (
 // BanManager manages IP-based bans and login attempt tracking to prevent brute-force attacks.
 type BanManager struct {
 	queries     *db.Queries
-	maxAttempts int
 	ctx         context.Context
-	mu          sync.RWMutex
 	ipBans      map[netip.Addr]time.Time
 	attempts    map[netip.Addr]int
+	banDuration time.Duration
+	mu          sync.RWMutex
+	maxAttempts int
 }
 
 // NewBanManager creates a new BanManager and loads existing active bans from the database.
-func NewBanManager(ctx context.Context, queries *db.Queries, maxAttempts int) *BanManager {
+func NewBanManager(ctx context.Context, queries *db.Queries, maxAttempts int, banDuration time.Duration) *BanManager {
 	bm := &BanManager{
 		queries:     queries,
 		maxAttempts: maxAttempts,
+		banDuration: banDuration,
 		ctx:         ctx,
 		ipBans:      make(map[netip.Addr]time.Time),
 		attempts:    make(map[netip.Addr]int),
@@ -50,13 +52,7 @@ func NewBanManager(ctx context.Context, queries *db.Queries, maxAttempts int) *B
 	return bm
 }
 
-// IsBanned checks if a given IP address is currently banned. Loopback (127.0.0.1 /
-// ::1) is never banned — it is the host itself (local tools, load tests) and must not
-// be able to lock itself out via the brute-force throttle.
-
-
-// IsBanned checks if a given IP address is currently banned.
-// Loopback (127.0.0.1 / ::1) is never banned.
+// IsBanned checks if a given IP address is currently banned. 127.0.0.1 is never banned.
 func (m *BanManager) IsBanned(ip netip.Addr) bool {
 	if ip.IsLoopback() {
 		return false
@@ -103,7 +99,7 @@ func (m *BanManager) RecordFailure(ip netip.Addr) {
 	count := m.attempts[ip]
 
 	if count >= m.maxAttempts {
-		expiry := time.Now().Add(15 * time.Minute)
+		expiry := time.Now().Add(m.banDuration)
 		m.ipBans[ip] = expiry
 		delete(m.attempts, ip)
 		m.mu.Unlock()

@@ -22,8 +22,8 @@ type SessionInfo struct {
 
 // Shard reduces lock contention dramatically by isolating mutations.
 type Shard struct {
-	mu     sync.RWMutex
 	active map[string]SessionInfo
+	mu     sync.RWMutex
 }
 
 // SessionRegistry manages active user sessions using concurrent sharding.

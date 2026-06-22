@@ -10,7 +10,13 @@ import (
 	"crypto/rsa"
 	"errors"
 	"math/big"
+	"sync"
 	"sync/atomic"
+)
+
+const (
+	RSAKeyBits     = 1024 // RSA key size in bits
+	RSAModulusSize = 128  // RSA modulus size in bytes (for 1024-bit key)
 )
 
 // ScrambledKey holds an RSA private key and its scrambled modulus.
@@ -19,15 +25,17 @@ type ScrambledKey struct {
 	Modulus    [RSAModulusSize]byte // The scrambled public modulus (N)
 }
 
-const (
-	RSAKeyBits     = 1024 // RSA key size in bits
-	RSAModulusSize = 128  // RSA modulus size in bytes (for 1024-bit key)
-)
+// rsaScratch holds the big.Int temporaries for one CRT decryption.
+type rsaScratch struct {
+	c, m1, m2, h, m big.Int
+}
 
 var (
 	rsaPool []ScrambledKey
 	rsaIdx  atomic.Uint32
 )
+
+var rsaScratchPool = sync.Pool{New: func() any { return new(rsaScratch) }}
 
 // InitRSAPool initializes a pool of pre-generated RSA keys to avoid expensive generation during login.
 func InitRSAPool(size int) {
@@ -75,31 +83,29 @@ func RSADecrypt(key *ScrambledKey, ciphertext []byte) ([]byte, error) {
 		return nil, errors.New("crypto: invalid ciphertext size")
 	}
 
-	c := new(big.Int).SetBytes(ciphertext)
 	priv := key.PrivateKey
+	s := rsaScratchPool.Get().(*rsaScratch)
 
-	m1 := new(big.Int).Exp(c, priv.Precomputed.Dp, priv.Primes[0])
-	m2 := new(big.Int).Exp(c, priv.Precomputed.Dq, priv.Primes[1])
+	s.c.SetBytes(ciphertext)
 
-	h := new(big.Int).Sub(m1, m2)
-	if h.Sign() < 0 {
-		h.Add(h, priv.Primes[0])
+	s.m1.Exp(&s.c, priv.Precomputed.Dp, priv.Primes[0])
+	s.m2.Exp(&s.c, priv.Precomputed.Dq, priv.Primes[1])
+
+	s.h.Sub(&s.m1, &s.m2)
+	if s.h.Sign() < 0 {
+		s.h.Add(&s.h, priv.Primes[0])
 	}
-	h.Mul(h, priv.Precomputed.Qinv)
-	h.Mod(h, priv.Primes[0])
+	s.h.Mul(&s.h, priv.Precomputed.Qinv)
+	s.h.Mod(&s.h, priv.Primes[0])
 
-	m := new(big.Int).Mul(h, priv.Primes[1])
-	m.Add(m, m2)
+	s.m.Mul(&s.h, priv.Primes[1])
+	s.m.Add(&s.m, &s.m2)
 
-	plain := m.Bytes()
+	out := make([]byte, RSAModulusSize)
+	s.m.FillBytes(out) // Always left-pads to 128 bytes; m < N (1024-bit) so it fits
 
-	if len(plain) < RSAModulusSize {
-		padded := make([]byte, RSAModulusSize)
-		copy(padded[RSAModulusSize-len(plain):], plain) // Pad with leading zeros
-		return padded, nil
-	}
-
-	return plain, nil
+	rsaScratchPool.Put(s)
+	return out, nil
 }
 
 func fillAndScrambleModulus(dst *[RSAModulusSize]byte, modulus *big.Int) {

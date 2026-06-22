@@ -7,6 +7,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"regexp"
 	"testing"
 
@@ -72,7 +73,7 @@ func TestAuthenticator_Authenticate(t *testing.T) {
 				AddRow(int64(1), username, string(hashedPassword), int32(0), int32(0), false))
 
 		_, err := auth.Authenticate(context.Background(), username, "wrongpass", "127.0.0.1")
-		if err != ErrInvalidPassword {
+		if !errors.Is(err, ErrInvalidPassword) {
 			t.Errorf("expected ErrInvalidPassword, got %v", err)
 		}
 

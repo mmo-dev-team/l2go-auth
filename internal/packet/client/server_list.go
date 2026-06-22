@@ -17,8 +17,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// ServerDashboardController handles the request for the game server list
-// and provides account-specific character counts for each server.
+// ServerDashboardController handles the request for the game server list.
 type ServerDashboardController struct {
 	ServerSvc *service.ServerList
 	Kicker    service.Kicker

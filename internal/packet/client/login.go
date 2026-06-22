@@ -8,7 +8,6 @@ package client
 import (
 	"context"
 	"errors"
-	"net/netip"
 	"runtime"
 	"strings"
 	"time"
@@ -20,11 +19,11 @@ import (
 	"github.com/mmo-dev-team/l2go-auth/pkg/crypto"
 	"github.com/mmo-dev-team/l2go-auth/pkg/network"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 )
 
-// LoginController manages the account authentication flow, including RSA decryption,
-// password hashing verification, and session registration.
+// LoginController manages the account authentication flow.
 type LoginController struct {
 	auth     *service.Authenticator
 	sessions *service.SessionRegistry
@@ -70,10 +69,7 @@ func (ctrl *LoginController) HandleLogin(c *client.Client, r *network.PacketRead
 	return nil
 }
 
-// processLogin runs off the event loop. The login protocol is strictly
-// request/response — the client cannot send its next packet until it receives
-// our reply — so the connection-state mutations here are safely ordered before
-// the next OnTraffic for this connection. All replies go out via AsyncWrite.
+// processLogin runs off the event loop.
 func (ctrl *LoginController) processLogin(c *client.Client, block1, block2 []byte) {
 	ctrl.sem <- struct{}{}
 	defer func() { <-ctrl.sem }()
@@ -87,13 +83,9 @@ func (ctrl *LoginController) processLogin(c *client.Client, block1, block2 []byt
 
 	account, err := ctrl.auth.Authenticate(context.Background(), username, password, c.RemoteIP)
 	if err != nil {
-		metrics.LoginAttempts.WithLabelValues("fail", getFailLabel(err)).Inc()
+		failCounter(err).Inc()
 		log.Warn().Err(err).Str("ip", c.RemoteIP).Str("username", username).Msg("Authentication failed")
-		ipAddr, nErr := netip.ParseAddr(c.RemoteIP)
-		if nErr != nil {
-			ipAddr = netip.IPv4Unspecified()
-		}
-		ctrl.bans.RecordFailure(ipAddr)
+		ctrl.bans.RecordFailure(c.RemoteAddr)
 
 		if errors.Is(err, service.ErrAccountBanned) {
 			_ = c.SendAndCloseAsync(ServerLoginBanned, func(w *network.PacketWriter) {
@@ -105,7 +97,7 @@ func (ctrl *LoginController) processLogin(c *client.Client, block1, block2 []byt
 		return
 	}
 
-	metrics.LoginAttempts.WithLabelValues("success", "").Inc()
+	metrics.LoginSuccess.Inc()
 	kickOld, allow := ctrl.sessions.TryRegister(username)
 	if !allow {
 		_ = sendLoginFail(c, 0x07) // REASON_ACCOUNT_IN_USE
@@ -122,15 +114,11 @@ func (ctrl *LoginController) processLogin(c *client.Client, block1, block2 []byt
 		}
 	}
 
-	ipAddr, nErr := netip.ParseAddr(c.RemoteIP)
-	if nErr != nil {
-		ipAddr = netip.IPv4Unspecified()
-	}
-	ctrl.bans.ResetAttempts(ipAddr)
+	ctrl.bans.ResetAttempts(c.RemoteAddr)
 	ctrl.sessions.Register(username, c.SessionID)
 
 	c.AccountID = account.ID
-	c.Account = username
+	c.SetAccount(username)
 	c.State = client.StateAuthedLogin
 	c.LastServer = account.LastServer
 
@@ -149,8 +137,7 @@ func (ctrl *LoginController) processLogin(c *client.Client, block1, block2 []byt
 	})
 }
 
-// readLoginBlocks copies the one or two RSA-encrypted credential blocks out of
-// the pooled reader so they survive past the handler return.
+// readLoginBlocks copies the one or two RSA-encrypted credential blocks.
 func readLoginBlocks(r *network.PacketReader) (block1, block2 []byte, err error) {
 	b1, err := r.ReadBytes(128)
 	if err != nil {
@@ -169,8 +156,7 @@ func readLoginBlocks(r *network.PacketReader) (block1, block2 []byte, err error)
 	return block1, block2, nil
 }
 
-// decodeCredentials RSA-decrypts the credential blocks and extracts the
-// username/password. block2 == nil selects the legacy single-block layout.
+// decodeCredentials RSA-decrypts the credential blocks.
 func decodeCredentials(key *crypto.ScrambledKey, block1, block2 []byte) (string, string, error) {
 	var decrypted [256]byte
 
@@ -201,16 +187,16 @@ func decodeCredentials(key *crypto.ScrambledKey, block1, block2 []byte) (string,
 	return strings.ToLower(username), password, nil
 }
 
-func getFailLabel(err error) string {
+func failCounter(err error) prometheus.Counter {
 	switch {
 	case errors.Is(err, service.ErrInvalidPassword):
-		return "invalid_password"
+		return metrics.LoginFailInvalidPwd
 	case errors.Is(err, service.ErrAccountNotFound):
-		return "account_not_found"
+		return metrics.LoginFailNotFound
 	case errors.Is(err, service.ErrAccountBanned):
-		return "account_banned"
+		return metrics.LoginFailBanned
 	default:
-		return "system_error"
+		return metrics.LoginFailSystem
 	}
 }
 

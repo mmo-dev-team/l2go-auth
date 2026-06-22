@@ -78,6 +78,50 @@ func TestPacketReaderBounds(t *testing.T) {
 	}
 }
 
+// TestSkipString advances past a UTF-16LE string without decoding it.
+func TestSkipString(t *testing.T) {
+	w := GetPacketWriter()
+	defer PutPacketWriter(w)
+
+	w.WriteString("skip-me")
+	w.WriteByte(0xAB)
+	data := w.Bytes()
+
+	r, err := GetPacketReader(data)
+	if err != nil {
+		t.Fatalf("Failed to create reader: %v", err)
+	}
+	defer PutPacketReader(r)
+
+	if _, err = r.ReadUint16(); err != nil { // consume the 2-byte length header
+		t.Fatalf("ReadUint16 header: %v", err)
+	}
+
+	if err = r.SkipString(); err != nil {
+		t.Fatalf("SkipString returned error: %v", err)
+	}
+
+	b, err := r.ReadByte()
+	if err != nil {
+		t.Fatalf("ReadByte after SkipString: %v", err)
+	}
+	if b != 0xAB {
+		t.Errorf("Expected to land on 0xAB after skip, got 0x%X", b)
+	}
+}
+
+func TestSkipStringMissingTerminator(t *testing.T) {
+	r, err := GetPacketReader([]byte{0x41, 0x00, 0x42, 0x00})
+	if err != nil {
+		t.Fatalf("Failed to create reader: %v", err)
+	}
+	defer PutPacketReader(r)
+
+	if err = r.SkipString(); err == nil {
+		t.Error("Expected error when no null terminator is present")
+	}
+}
+
 func FuzzPacketReader(f *testing.F) {
 	// Seed corpus with some semi-valid looking data
 	f.Add([]byte{0x01, 0x02, 0x03, 0x04, 0x00, 0x00})

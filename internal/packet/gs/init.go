@@ -87,7 +87,7 @@ func (ctrl *ServerInitController) HandleInit(gsc *client.GameServerClient, r *ne
 			return err
 		}
 		for i := 1; i < int(hostCount); i++ {
-			if _, err = r.ReadString(); err != nil {
+			if err = r.SkipString(); err != nil {
 				return err
 			}
 		}
@@ -106,10 +106,11 @@ func (ctrl *ServerInitController) HandleInit(gsc *client.GameServerClient, r *ne
 		return err
 	}
 
-	gsc.ServerID = int32(serverID)
+	sid := int32(serverID)
+	gsc.ServerID = sid
 
 	srvConfig := service.Server{
-		ID:             int32(serverID),
+		ID:             sid,
 		IP:             serverHost,
 		Port:           int32(serverPort),
 		CurrentPlayers: 0,
@@ -123,7 +124,7 @@ func (ctrl *ServerInitController) HandleInit(gsc *client.GameServerClient, r *ne
 	ctrl.ServerSvc.Register(&srvConfig)
 
 	log.Info().
-		Int32("server_id", int32(serverID)).
+		Int32("server_id", sid).
 		Str("host", serverHost).
 		Int16("port", serverPort).
 		Msg("Game Server authenticated and registered")

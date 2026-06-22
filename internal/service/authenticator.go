@@ -46,7 +46,7 @@ func NewAuthenticator(queries *db.Queries, autoCreate bool) *Authenticator {
 func (a *Authenticator) Authenticate(ctx context.Context, username, password, ip string) (db.FindAccountRow, error) {
 	start := time.Now()
 	account, err := a.queries.FindAccount(ctx, username)
-	metrics.DBQueryDuration.WithLabelValues("FindAccount").Observe(time.Since(start).Seconds())
+	metrics.DBFindAccount.Observe(time.Since(start).Seconds())
 
 	if errors.Is(err, pgx.ErrNoRows) {
 		if a.autoCreate {
@@ -121,12 +121,12 @@ func (a *Authenticator) createAccount(ctx context.Context, username, password, i
 		Pwd:    hashedStr,
 		LastIp: targetIP,
 	})
-	metrics.DBQueryDuration.WithLabelValues("RegisterAccount").Observe(time.Since(start).Seconds())
+	metrics.DBRegisterAccount.Observe(time.Since(start).Seconds())
 	if err != nil {
 		log.Error().Err(err).Str("username", username).Msg("Failed to execute account storage mutation")
 		return "", 0, err
 	}
 
-	log.Debug().Str("username", username).Str("ip", ip).Msg("New account auto-registered via network gate")
+	log.Debug().Str("username", username).Str("ip", ip).Msg("New account auto-registered via network")
 	return hashedStr, accountID, nil
 }

@@ -6,6 +6,7 @@
 package client
 
 import (
+	"sync/atomic"
 	"time"
 
 	"github.com/mmo-dev-team/l2go-auth/pkg/network"
@@ -16,10 +17,20 @@ import (
 
 // GameServerClient represents a connected Game Server on the internal listener.
 type GameServerClient struct {
-	LastActivity time.Time
 	Conn         gnet.Conn
 	RemoteIP     string
+	lastActivity atomic.Int64
 	ServerID     int32
+}
+
+// Touch records the current time as the last activity timestamp (atomic, lock-free).
+func (gsc *GameServerClient) Touch() {
+	gsc.lastActivity.Store(time.Now().UnixNano())
+}
+
+// LastActivityNanos returns the last activity timestamp as Unix nanoseconds.
+func (gsc *GameServerClient) LastActivityNanos() int64 {
+	return gsc.lastActivity.Load()
 }
 
 // Send constructs a packet with the given opcode and body and sends it to the Game Server.
@@ -37,7 +48,7 @@ func (gsc *GameServerClient) Send(opcode byte, build func(w *network.PacketWrite
 		return err
 	}
 
-	gsc.LastActivity = time.Now()
+	gsc.Touch()
 	return nil
 }
 
